@@ -2,6 +2,14 @@ FROM python:3.14-slim
 
 WORKDIR /app
 
+# Swap Debian mirrors to bypass potential CDN/Cloudflare 403 blocks in certain networks
+RUN if [ -f /etc/apt/sources.list.d/debian.sources ]; then \
+        sed -i 's|deb.debian.org/debian$|ftp.us.debian.org/debian|g' /etc/apt/sources.list.d/debian.sources; \
+    else \
+        sed -i 's|deb.debian.org/debian |ftp.us.debian.org/debian |g' /etc/apt/sources.list; \
+    fi
+
+
 # Install uv for fast dependency management
 RUN pip install --no-cache-dir uv
 
