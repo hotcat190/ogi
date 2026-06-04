@@ -576,6 +576,7 @@ export const useGraphStore = create<GraphState>((set, get) => ({
 
   loadGraph: async (projectId) => {
     set({ loading: true, error: null });
+    const t0 = performance.now();
     try {
       const data = await api.graph.get(projectId, true);
       const graph = createGraph();
@@ -649,6 +650,14 @@ export const useGraphStore = create<GraphState>((set, get) => ({
         analysisResults: null,
         graphRecovery: { nonce: 0, reason: null },
       });
+      const duration = performance.now() - t0;
+      console.log(`[OGI Perf] Graph hydrated in ${duration.toFixed(2)}ms`);
+      api.dev.perfLog(
+        "hydration",
+        duration,
+        `nodes: ${data.entities.length} | edges: ${data.edges.length}`,
+        projectId
+      ).catch((err) => console.error("Failed to send perf log:", err));
     } catch (e) {
       set({ error: String(e), loading: false });
     }
@@ -656,6 +665,7 @@ export const useGraphStore = create<GraphState>((set, get) => ({
 
   loadGraphWindow: async (projectId, fromTs, toTs) => {
     set({ loading: true, error: null });
+    const t0 = performance.now();
     try {
       const data = await api.graph.window(projectId, fromTs, toTs);
       const graph = createGraph();
@@ -727,6 +737,14 @@ export const useGraphStore = create<GraphState>((set, get) => ({
         nodeOverlay: null,
         graphRecovery: { nonce: 0, reason: null },
       });
+      const duration = performance.now() - t0;
+      console.log(`[OGI Perf] Window graph hydrated in ${duration.toFixed(2)}ms`);
+      api.dev.perfLog(
+        "hydration-window",
+        duration,
+        `nodes: ${data.entities.length} | edges: ${data.edges.length}`,
+        projectId
+      ).catch((err) => console.error("Failed to send perf log:", err));
     } catch (e) {
       set({ error: String(e), loading: false });
     }

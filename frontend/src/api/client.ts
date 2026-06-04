@@ -618,6 +618,19 @@ export const api = {
     update: (slug: string) =>
       request<InstallResult>(`/registry/update/${slug}`, { method: "POST" }),
   },
+
+  dev: {
+    perfLog: (eventType: string, durationMs: number, details?: string, projectId?: string) =>
+      request<{ status: string }>("/dev/perf-log", {
+        method: "POST",
+        body: JSON.stringify({
+          event_type: eventType,
+          duration_ms: durationMs,
+          details,
+          project_id: projectId,
+        }),
+      }),
+  },
 };
 
 export type { DiscoverProject, MyProjectItem, ProjectMember };

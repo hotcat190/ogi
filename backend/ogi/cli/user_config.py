@@ -65,7 +65,8 @@ def _format_scalar(value: Any) -> str:
         return "true" if value else "false"
     if isinstance(value, int):
         return str(value)
-    return f"\"{str(value).replace('\"', '\\\"')}\""
+    escaped = str(value).replace('"', '\\"')
+    return f'"{escaped}"'
 
 
 def _format_array(values: list[Any]) -> str:

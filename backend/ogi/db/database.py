@@ -1,7 +1,7 @@
 from typing import AsyncGenerator
 
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncEngine, AsyncSession, async_sessionmaker
-from sqlalchemy import pool
+from sqlalchemy import pool, event
 from sqlmodel import SQLModel
 
 from ogi.config import settings
@@ -33,7 +33,13 @@ async def init_db() -> None:
             db_url = "sqlite+aiosqlite:///:memory:"
         else:
             db_url = f"sqlite+aiosqlite:///{settings.abs_database_path}"
-        engine = create_async_engine(db_url, echo=False)
+        engine = create_async_engine(db_url, echo=False)        
+        
+        @event.listens_for(engine.sync_engine, "connect")
+        def set_sqlite_pragma(dbapi_connection, connection_record):
+            cursor = dbapi_connection.cursor()
+            cursor.execute("PRAGMA foreign_keys=ON")
+            cursor.close()
     else:
         db_url = settings.database_url
         if db_url and db_url.startswith("postgresql://"):
@@ -70,6 +76,21 @@ async def init_db() -> None:
     async_session_maker = async_sessionmaker(
         engine, class_=AsyncSession, expire_on_commit=False
     )
+
+    # In local/no-auth mode, ensure the anonymous profile exists in the DB so FK constraints are not violated.
+    if not settings.supabase_url or not settings.supabase_anon_key:
+        from ogi.models.auth import UserProfile
+        import uuid
+        async with async_session_maker() as session:
+            anon_id = uuid.UUID("00000000-0000-0000-0000-000000000000")
+            profile = await session.get(UserProfile, anon_id)
+            if not profile:
+                profile = UserProfile(id=anon_id, email="local@localhost")
+                session.add(profile)
+                try:
+                    await session.commit()
+                except Exception:
+                    await session.rollback()
 
 
 async def close_db() -> None:

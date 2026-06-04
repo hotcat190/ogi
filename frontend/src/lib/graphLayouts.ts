@@ -2,6 +2,7 @@ import Graph from "graphology";
 import forceAtlas2 from "graphology-layout-forceatlas2";
 import { circular } from "graphology-layout";
 import type { Entity } from "../types/entity";
+import { api } from "../api/client";
 
 export type GraphLayoutPreset =
   | "force"
@@ -519,6 +520,7 @@ export function applyGraphLayout(
   }
 
   const ctx = { graph, entities };
+  const t0 = performance.now();
   switch (preset) {
     case "force":
       applyForceDirectedLayout(graph, entities);
@@ -565,6 +567,21 @@ export function applyGraphLayout(
     default:
       break;
   }
+  const duration = performance.now() - t0;
+  console.log(`[OGI Perf] Layout ${preset} completed in ${duration.toFixed(2)}ms`);
+
+  let projectId: string | undefined = undefined;
+  if (graph.order > 0) {
+    const firstNode = graph.nodes()[0];
+    const ent = entities.get(firstNode);
+    if (ent) projectId = ent.project_id ?? undefined;
+  }
+  api.dev.perfLog(
+    "layout",
+    duration,
+    `preset: ${preset} | nodes: ${graph.order} | edges: ${graph.size}`,
+    projectId
+  ).catch((err) => console.error("Failed to send perf log:", err));
 
   for (const [node, position] of pinnedPositions) {
     if (!graph.hasNode(node)) continue;

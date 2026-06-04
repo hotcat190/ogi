@@ -62,7 +62,18 @@ async def get_current_user(
     If Supabase credentials are not configured (local dev mode), returns a fixed anonymous profile.
     """
     if not settings.supabase_url or not settings.supabase_anon_key:
-        return _ANON_USER
+        profile = await session.get(UserProfile, _ANON_USER.id)
+        if not profile:
+            profile = UserProfile(id=_ANON_USER.id, email=_ANON_USER.email)
+            profile = await session.merge(profile)
+            try:
+                await session.commit()
+            except Exception:
+                await session.rollback()
+                profile = await session.get(UserProfile, _ANON_USER.id)
+                if not profile:
+                    raise
+        return _detach_profile(profile)
 
     auth_header = request.headers.get("Authorization", "")
     if not auth_header.startswith("Bearer "):

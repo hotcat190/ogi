@@ -12,7 +12,7 @@ import re
 import time
 from datetime import timedelta
 from pathlib import Path
-from typing import TypedDict
+from typing_extensions import TypedDict
 
 import httpx
 from ogi.config import settings

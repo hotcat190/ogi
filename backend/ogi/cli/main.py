@@ -15,6 +15,7 @@ import typer
 
 from ogi.cli.commands.config import app as config_app
 from ogi.cli.commands.transform import app as transform_app
+from ogi.cli.commands.dev import app as dev_app
 
 app = typer.Typer(
     name="ogi",
@@ -24,6 +25,7 @@ app = typer.Typer(
 
 app.add_typer(transform_app, name="transform")
 app.add_typer(config_app, name="config")
+app.add_typer(dev_app, name="dev")
 
 
 def main() -> None:

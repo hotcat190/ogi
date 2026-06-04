@@ -53,25 +53,26 @@ async def _recover_stale_jobs() -> None:
     from datetime import datetime, timezone
 
     try:
-        async for session in get_session():
-            from ogi.models.transform import TransformRun
-            stmt = select(TransformRun).where(
-                or_(
-                    TransformRun.status == TransformStatus.RUNNING,
-                    TransformRun.status == TransformStatus.PENDING,
+        from ogi.db.database import async_session_maker
+        if async_session_maker is not None:
+            async with async_session_maker() as session:
+                from ogi.models.transform import TransformRun
+                stmt = select(TransformRun).where(
+                    or_(
+                        TransformRun.status == TransformStatus.RUNNING,
+                        TransformRun.status == TransformStatus.PENDING,
+                    )
                 )
-            )
-            result = await session.execute(stmt)
-            stale_runs = list(result.scalars().all())
-            for run in stale_runs:
-                run.status = TransformStatus.FAILED
-                run.error = "Server restarted while job was in progress"
-                run.completed_at = datetime.now(timezone.utc)
-                session.add(run)
-            if stale_runs:
-                await session.commit()
-                logger.info("Recovered %d stale transform runs", len(stale_runs))
-            break
+                result = await session.execute(stmt)
+                stale_runs = list(result.scalars().all())
+                for run in stale_runs:
+                    run.status = TransformStatus.FAILED
+                    run.error = "Server restarted while job was in progress"
+                    run.completed_at = datetime.now(timezone.utc)
+                    session.add(run)
+                if stale_runs:
+                    await session.commit()
+                    logger.info("Recovered %d stale transform runs", len(stale_runs))
     except Exception:
         logger.exception("Failed to recover stale jobs")
 

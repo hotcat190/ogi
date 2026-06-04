@@ -2033,6 +2033,12 @@ async def test_get_transform_run_forbidden_for_non_member(
     owner = UserProfile(id=uuid4(), email="owner-runs@test.com")
     outsider = UserProfile(id=uuid4(), email="outsider-runs@test.com")
 
+    assert db_module.async_session_maker is not None
+    async with db_module.async_session_maker() as session:
+        session.add(owner)
+        session.add(outsider)
+        await session.commit()
+
     app.dependency_overrides[get_current_user] = lambda: owner
     try:
         resp = await client.post("/api/v1/projects", json={"name": "RunReadScope"})
@@ -2081,6 +2087,12 @@ async def test_cancel_transform_run_forbidden_for_non_member(
 
     owner = UserProfile(id=uuid4(), email="owner-cancel@test.com")
     outsider = UserProfile(id=uuid4(), email="outsider-cancel@test.com")
+
+    assert db_module.async_session_maker is not None
+    async with db_module.async_session_maker() as session:
+        session.add(owner)
+        session.add(outsider)
+        await session.commit()
 
     app.dependency_overrides[get_current_user] = lambda: owner
     try:
@@ -3274,3 +3286,15 @@ async def test_location_suggest_rate_limit_feedback(client: AsyncClient):
         assert (data["retry_after_seconds"] or 0) > 0
     finally:
         LocationSearchStore._cooldown_until = 0.0
+
+
+@pytest.mark.asyncio
+async def test_local_mode_project_creation_fk_constraint(client: AsyncClient):
+    # This test verifies that in local mode (no Supabase configured),
+    # project creation succeeds and does not raise a ForeignKeyViolationError (IntegrityError).
+    resp = await client.post("/api/v1/projects", json={"name": "FK Failure Project"})
+    assert resp.status_code == 201
+    data = resp.json()
+    assert data["name"] == "FK Failure Project"
+    assert data["owner_id"] == "00000000-0000-0000-0000-000000000000"
+
