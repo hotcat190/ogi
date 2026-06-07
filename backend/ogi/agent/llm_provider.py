@@ -7,7 +7,7 @@ from typing import Any, Sequence
 
 import httpx
 from openai import AsyncOpenAI
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ogi.agent.models import AgentRun
@@ -29,6 +29,39 @@ class LlmDecision(BaseModel):
     tool_params: dict[str, Any] = Field(default_factory=dict)
     final_summary: str | None = None
     token_usage: TokenUsage = Field(default_factory=TokenUsage)
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_decision(cls, data: Any) -> Any:
+        if not isinstance(data, dict):
+            return data
+
+        # If action_type is missing, but name/arguments/parameters are present, adapt it
+        if "action_type" not in data:
+            name = data.get("name") or data.get("tool") or data.get("tool_name")
+            if name:
+                data["action_type"] = "tool_call"
+                data["tool_name"] = name
+                params = data.get("tool_params") or data.get("arguments") or data.get("parameters") or data.get("args")
+                if isinstance(params, str):
+                    try:
+                        params = json.loads(params)
+                    except Exception:
+                        pass
+                data["tool_params"] = params if isinstance(params, dict) else {}
+            elif "final_summary" in data:
+                data["action_type"] = "finish"
+            else:
+                data["action_type"] = "finish"
+
+        if "reasoning" not in data:
+            data["reasoning"] = data.get("thought") or data.get("reason") or (
+                f"Selecting tool {data.get('tool_name')} to proceed."
+                if data.get("action_type") == "tool_call"
+                else "No explicit reasoning provided by the model."
+            )
+
+        return data
 
 
 class LLMProvider(ABC):
@@ -114,16 +147,23 @@ class OpenAILLMProvider(LLMProvider):
             raise RuntimeError("LLM provider is not configured")
 
         tool_schema = [tool.model_dump(mode="json") for tool in tools]
-        system_prompt = (
-            "You are the AI Investigator orchestrator for OpenGraph Intel. "
-            "Return only JSON with fields: reasoning, action_type, tool_name, tool_params, final_summary. "
-            "action_type must be 'tool_call' or 'finish'. tool_name must match one available tool. "
-            "If finishing, set final_summary."
+        system_content = (
+            "You are the AI Investigator orchestrator for OpenGraph Intel.\n"
+            "Return only JSON with fields: reasoning, action_type, tool_name, tool_params, final_summary.\n"
+            "action_type must be 'tool_call' or 'finish'. tool_name must match one available tool.\n"
+            "If finishing, set final_summary.\n\n"
+            f"Available tool schema:\n{json.dumps(tool_schema)}\n"
         )
+        non_system_messages = []
+        for msg in messages:
+            if msg.get("role") == "system":
+                system_content += f"\n{msg.get('content')}"
+            else:
+                non_system_messages.append(msg)
+
         input_messages = [
-            {"role": "system", "content": system_prompt},
-            *messages,
-            {"role": "system", "content": f"Tool schema: {json.dumps(tool_schema)}"},
+            {"role": "system", "content": system_content.strip()},
+            *non_system_messages,
         ]
 
         client = AsyncOpenAI(
@@ -158,6 +198,88 @@ class OpenAILLMProvider(LLMProvider):
         raise RuntimeError("LLM provider did not return a decision")
 
 
+class GeminiLLMProvider(LLMProvider):
+    def __init__(
+        self,
+        *,
+        api_key: str,
+        model: str,
+        retry_attempts: int = 3,
+    ) -> None:
+        self._api_key = api_key
+        self._model = model if model.startswith("models/") else f"models/{model}"
+        self._retry_attempts = retry_attempts
+
+    async def decide(
+        self,
+        *,
+        messages: list[dict[str, Any]],
+        tools: list[ToolDefinition],
+    ) -> LlmDecision:
+        if not self._api_key or not self._model:
+            raise RuntimeError("Gemini LLM provider is not configured")
+
+        tool_schema = [tool.model_dump(mode="json") for tool in tools]
+        system_content = (
+            "You are the AI Investigator orchestrator for OpenGraph Intel.\n"
+            "Return only JSON with fields: reasoning, action_type, tool_name, tool_params, final_summary.\n"
+            "action_type must be 'tool_call' or 'finish'. tool_name must match one available tool.\n"
+            "If finishing, set final_summary.\n\n"
+            f"Available tool schema:\n{json.dumps(tool_schema)}\n"
+        )
+        non_system_messages = []
+        for msg in messages:
+            if msg.get("role") == "system":
+                system_content += f"\n{msg.get('content')}"
+            else:
+                non_system_messages.append(msg)
+
+        contents = []
+        for msg in non_system_messages:
+            role = "user" if msg.get("role") == "user" else "model"
+            contents.append({
+                "role": role,
+                "parts": [{"text": msg.get("content")}]
+            })
+
+        payload = {
+            "contents": contents,
+            "systemInstruction": {
+                "parts": [{"text": system_content.strip()}]
+            },
+            "generationConfig": {
+                "temperature": 0.2,
+                "responseMimeType": "application/json"
+            }
+        }
+
+        url = f"https://generativelanguage.googleapis.com/v1beta/{self._model}:generateContent?key={self._api_key}"
+
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            for attempt in range(1, self._retry_attempts + 1):
+                response = await client.post(url, json=payload)
+                if response.status_code < 500 and response.status_code != 429:
+                    if response.is_error:
+                        raise RuntimeError(_provider_error_message("Gemini", response))
+                    data = response.json()
+                    try:
+                        message = data["candidates"][0]["content"]["parts"][0]["text"]
+                        parsed = json.loads(message)
+                        usage = data.get("usageMetadata", {})
+                        parsed["token_usage"] = {
+                            "prompt_tokens": int(usage.get("promptTokenCount", 0)),
+                            "completion_tokens": int(usage.get("candidatesTokenCount", 0)),
+                        }
+                        return LlmDecision.model_validate(parsed)
+                    except (KeyError, IndexError, ValueError) as exc:
+                        raise RuntimeError(f"Unexpected response format from Gemini: {response.text}") from exc
+                if attempt == self._retry_attempts:
+                    response.raise_for_status()
+                await asyncio.sleep(min(2 ** (attempt - 1), 8))
+
+        raise RuntimeError("LLM provider did not return a decision")
+
+
 class OpenAICompatibleLLMProvider(LLMProvider):
     def __init__(
         self,
@@ -182,17 +304,26 @@ class OpenAICompatibleLLMProvider(LLMProvider):
             raise RuntimeError("LLM provider is not configured")
 
         tool_schema = [tool.model_dump(mode="json") for tool in tools]
-        instruction = {
-            "role": "system",
-            "content": (
-                "Return only JSON with fields: reasoning, action_type, tool_name, tool_params, final_summary. "
-                "action_type must be 'tool_call' or 'finish'. tool_name must match one available tool. "
-                "If finishing, set final_summary."
-            ),
-        }
+        system_content = (
+            "You are the AI Investigator orchestrator for OpenGraph Intel.\n"
+            "Return only JSON with fields: reasoning, action_type, tool_name, tool_params, final_summary.\n"
+            "action_type must be 'tool_call' or 'finish'. tool_name must match one available tool.\n"
+            "If finishing, set final_summary.\n\n"
+            f"Available tool schema:\n{json.dumps(tool_schema)}\n"
+        )
+        non_system_messages = []
+        for msg in messages:
+            if msg.get("role") == "system":
+                system_content += f"\n{msg.get('content')}"
+            else:
+                non_system_messages.append(msg)
+
         payload = {
             "model": self._model,
-            "messages": [instruction, *messages, {"role": "system", "content": f"Tool schema: {json.dumps(tool_schema)}"}],
+            "messages": [
+                {"role": "system", "content": system_content.strip()},
+                *non_system_messages,
+            ],
             "response_format": {"type": "json_object"},
             "temperature": 0.2,
         }
@@ -551,6 +682,12 @@ def build_llm_provider() -> LLMProvider:
             model=settings.llm_model,
             retry_attempts=settings.llm_retry_max_attempts,
         )
+    if provider == "gemini":
+        return GeminiLLMProvider(
+            api_key=settings.llm_api_key,
+            model=settings.llm_model,
+            retry_attempts=settings.llm_retry_max_attempts,
+        )
     raise RuntimeError(f"Unsupported LLM provider '{settings.llm_provider}'")
 
 
@@ -577,10 +714,9 @@ async def build_llm_provider_for_run(
         )
 
     if provider == "gemini":
-        return OpenAICompatibleLLMProvider(
+        return GeminiLLMProvider(
             api_key=api_key,
             model=model,
-            base_url="https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
             retry_attempts=settings.llm_retry_max_attempts,
         )
 
