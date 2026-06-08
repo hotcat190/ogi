@@ -65,36 +65,59 @@ async def redis_pubsub_listener() -> None:
     forwarded verbatim to the matching project's WebSocket connections.
     """
     import redis.asyncio as aioredis
+    import redis.exceptions
 
-    conn = aioredis.from_url(settings.redis_url, decode_responses=True)
-    pubsub = conn.pubsub()
-    await pubsub.psubscribe("ogi:transform_events:*")
     logger.info("Redis pub/sub listener started")
 
-    try:
-        async for raw_message in pubsub.listen():
-            if raw_message["type"] != "pmessage":
-                continue
-            channel: str = raw_message["channel"]
-            data: str = raw_message["data"]
+    while True:
+        try:
+            # We configure health_check_interval to periodically ping Redis and keep
+            # the connection active, and socket_keepalive to send TCP keepalives.
+            conn = aioredis.from_url(
+                settings.redis_url,
+                decode_responses=True,
+                health_check_interval=30,
+                socket_keepalive=True,
+                socket_timeout=None,
+            )
+            async with conn.pubsub() as pubsub:
+                await pubsub.psubscribe("ogi:transform_events:*")
+                logger.info("Subscribed to Redis pub/sub pattern ogi:transform_events:*")
 
-            # Channel format: ogi:transform_events:<project_id>
-            parts = channel.split(":")
-            if len(parts) < 3:
-                continue
-            try:
-                project_id = UUID(parts[2])
-            except ValueError:
-                continue
+                async for raw_message in pubsub.listen():
+                    if raw_message["type"] != "pmessage":
+                        continue
+                    channel: str = raw_message["channel"]
+                    data: str = raw_message["data"]
 
-            await ws_manager.broadcast_to_project(project_id, data)
-    except asyncio.CancelledError:
-        logger.info("Redis pub/sub listener cancelled")
-    except Exception:
-        logger.exception("Redis pub/sub listener error")
-    finally:
-        await pubsub.punsubscribe("ogi:transform_events:*")
-        await conn.aclose()
+                    # Channel format: ogi:transform_events:<project_id>
+                    parts = channel.split(":")
+                    if len(parts) < 3:
+                        continue
+                    try:
+                        project_id = UUID(parts[2])
+                    except ValueError:
+                        continue
+
+                    await ws_manager.broadcast_to_project(project_id, data)
+                
+                # If the generator finishes normally without exception (e.g. in unit tests),
+                # we exit the reconnection loop gracefully.
+                logger.info("Redis pub/sub listener generator exhausted, exiting listener loop.")
+                break
+        except asyncio.CancelledError:
+            logger.info("Redis pub/sub listener cancelled")
+            break
+        except (redis.exceptions.ConnectionError, redis.exceptions.TimeoutError) as e:
+            logger.warning(
+                "Redis pub/sub connection lost (%s: %s). Reconnecting in 5 seconds...",
+                type(e).__name__,
+                e,
+            )
+            await asyncio.sleep(5)
+        except Exception:
+            logger.exception("Unexpected error in Redis pub/sub listener. Reconnecting in 5 seconds...")
+            await asyncio.sleep(5)
 
 
 async def _resolve_ws_user(token: str | None) -> UserProfile | None:
