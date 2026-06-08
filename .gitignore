@@ -55,10 +55,6 @@ src-tauri/target/
 # Claude Code
 .claude/
 
-# Docs markdown stays local
-docs/*.md
-docs/**/*.md
-
 # OGI runtime plugin installs (local dev)
 backend/plugins/*
 !backend/plugins/.gitkeep
