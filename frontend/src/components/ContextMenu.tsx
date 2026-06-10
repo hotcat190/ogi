@@ -12,6 +12,7 @@ import {
   Link2,
   Palette,
   ImageIcon,
+  X,
 } from "lucide-react";
 import { toast } from "sonner";
 import { useGraphStore } from "../stores/graphStore";
@@ -69,6 +70,11 @@ export function ContextMenu() {
     connectionDraft,
     startConnectionDraft,
     cancelConnectionDraft,
+    shortestPathStartId,
+    shortestPathEndId,
+    setShortestPathStartId,
+    setShortestPathEndId,
+    clearShortestPath,
   } = useGraphStore();
   const { currentProject } = useProjectStore();
   const isViewer = useIsViewer();
@@ -151,6 +157,28 @@ export function ContextMenu() {
   }, [menuVisible, menuX, menuY]);
 
   const close = () => setMenu((m) => ({ ...m, visible: false }));
+
+  const handleSetPathStart = () => {
+    if (menu.id && menu.type === "node") {
+      setShortestPathStartId(menu.id);
+      toast.success("Path start node set");
+    }
+    close();
+  };
+
+  const handleSetPathEnd = () => {
+    if (menu.id && menu.type === "node") {
+      setShortestPathEndId(menu.id);
+      toast.success("Path end node set");
+    }
+    close();
+  };
+
+  const handleClearPath = () => {
+    clearShortestPath();
+    toast.success("Pathfinder cleared");
+    close();
+  };
 
   const handleDelete = async () => {
     if (!currentProject || !menu.id) return;
@@ -435,6 +463,29 @@ export function ContextMenu() {
             <Copy size={12} />
             Copy Value
           </button>
+
+          <div className="border-t border-border my-1" />
+
+          <button onClick={handleSetPathStart} className={itemClass}>
+            <Play size={12} className="text-yellow-500 shrink-0" style={{ transform: "rotate(90deg)" }} />
+            Set as Path Start
+          </button>
+
+          <button
+            onClick={handleSetPathEnd}
+            disabled={!shortestPathStartId || shortestPathStartId === menu.id}
+            className={`${itemClass} disabled:opacity-50`}
+          >
+            <Play size={12} className="text-green-500 shrink-0" style={{ transform: "rotate(90deg)" }} />
+            Set as Path End
+          </button>
+
+          {(shortestPathStartId || shortestPathEndId) && (
+            <button onClick={handleClearPath} className={itemClass}>
+              <X size={12} className="text-text-muted shrink-0" />
+              Clear Path Selection
+            </button>
+          )}
 
           {!isViewer && transforms.length > 0 && (
             <>

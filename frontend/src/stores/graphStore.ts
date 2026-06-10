@@ -373,10 +373,19 @@ interface AnalysisCommunitiesOverlay {
   colors: Record<string, string>;
 }
 
+interface ShortestPathOverlay {
+  type: "shortest-path";
+  pathNodeIds: Set<string>;
+  pathEdgeIds: Set<string>;
+  startNodeId: string;
+  endNodeId: string;
+}
+
 export type NodeOverlay =
   | SearchOverlay
   | AnalysisScoresOverlay
-  | AnalysisCommunitiesOverlay;
+  | AnalysisCommunitiesOverlay
+  | ShortestPathOverlay;
 
 export interface AnalysisResults {
   type: "scores" | "communities";
@@ -408,6 +417,11 @@ interface GraphState {
   analysisResults: AnalysisResults | null;
   graphRecovery: GraphRecoveryState;
   connectionDraft: ConnectionDraftState;
+  shortestPathStartId: string | null;
+  shortestPathEndId: string | null;
+  shortestPaths: string[][];
+  currentPathIndex: number;
+  shortestPathVisibleOnly: boolean;
 
   loadGraph: (projectId: string) => Promise<void>;
   loadGraphWindow: (projectId: string, fromTs?: string, toTs?: string) => Promise<void>;
@@ -466,6 +480,12 @@ interface GraphState {
   ) => void;
   performUndo: (projectId: string) => Promise<void>;
   performRedo: (projectId: string) => Promise<void>;
+  setShortestPathStartId: (nodeId: string | null) => void;
+  setShortestPathEndId: (nodeId: string | null) => void;
+  setShortestPathVisibleOnly: (enabled: boolean) => void;
+  setCurrentPathIndex: (index: number) => void;
+  clearShortestPath: () => void;
+  calculateShortestPaths: () => void;
 }
 
 function createGraph(): Graph {
@@ -573,6 +593,11 @@ export const useGraphStore = create<GraphState>((set, get) => ({
   analysisResults: null,
   graphRecovery: { nonce: 0, reason: null },
   connectionDraft: { sourceId: null, targetId: null, dialogOpen: false },
+  shortestPathStartId: null,
+  shortestPathEndId: null,
+  shortestPaths: [],
+  currentPathIndex: 0,
+  shortestPathVisibleOnly: true,
 
   loadGraph: async (projectId) => {
     set({ loading: true, error: null });
@@ -649,6 +674,11 @@ export const useGraphStore = create<GraphState>((set, get) => ({
         nodeOverlay: null,
         analysisResults: null,
         graphRecovery: { nonce: 0, reason: null },
+        shortestPathStartId: null,
+        shortestPathEndId: null,
+        shortestPaths: [],
+        currentPathIndex: 0,
+        shortestPathVisibleOnly: true,
       });
       const duration = performance.now() - t0;
       console.log(`[OGI Perf] Graph hydrated in ${duration.toFixed(2)}ms`);
@@ -736,6 +766,11 @@ export const useGraphStore = create<GraphState>((set, get) => ({
         searchQuery: "",
         nodeOverlay: null,
         graphRecovery: { nonce: 0, reason: null },
+        shortestPathStartId: null,
+        shortestPathEndId: null,
+        shortestPaths: [],
+        currentPathIndex: 0,
+        shortestPathVisibleOnly: true,
       });
       const duration = performance.now() - t0;
       console.log(`[OGI Perf] Window graph hydrated in ${duration.toFixed(2)}ms`);
@@ -1663,6 +1698,176 @@ export const useGraphStore = create<GraphState>((set, get) => ({
       graphRecovery: { nonce: state.graphRecovery.nonce, reason: null },
     })),
 
+  setShortestPathStartId: (nodeId) => {
+    set({ shortestPathStartId: nodeId });
+    get().calculateShortestPaths();
+  },
+  setShortestPathEndId: (nodeId) => {
+    set({ shortestPathEndId: nodeId });
+    get().calculateShortestPaths();
+  },
+  setShortestPathVisibleOnly: (enabled) => {
+    set({ shortestPathVisibleOnly: enabled });
+    get().calculateShortestPaths();
+  },
+  setCurrentPathIndex: (index) => {
+    const { shortestPaths, shortestPathStartId, shortestPathEndId, graph } = get();
+    if (index < 0 || index >= shortestPaths.length) return;
+    set({ currentPathIndex: index });
+
+    const activePathNodes = shortestPaths[index];
+    const pathNodeIds = new Set(activePathNodes);
+    const pathEdgeIds = new Set<string>();
+
+    for (let i = 0; i < activePathNodes.length - 1; i++) {
+      const u = activePathNodes[i];
+      const v = activePathNodes[i + 1];
+      if (graph.hasNode(u) && graph.hasNode(v)) {
+        graph.forEachEdge(u, (edge) => {
+          const src = graph.source(edge);
+          const tgt = graph.target(edge);
+          if ((src === u && tgt === v) || (src === v && tgt === u)) {
+            pathEdgeIds.add(edge);
+          }
+        });
+      }
+    }
+
+    set({
+      nodeOverlay: {
+        type: "shortest-path",
+        pathNodeIds,
+        pathEdgeIds,
+        startNodeId: shortestPathStartId!,
+        endNodeId: shortestPathEndId!,
+      },
+    });
+  },
+  clearShortestPath: () => {
+    set({
+      shortestPathStartId: null,
+      shortestPathEndId: null,
+      shortestPaths: [],
+      currentPathIndex: 0,
+    });
+    const overlay = get().nodeOverlay;
+    if (overlay?.type === "shortest-path") {
+      set({ nodeOverlay: null });
+    }
+  },
+  calculateShortestPaths: () => {
+    const { graph, shortestPathStartId, shortestPathEndId, shortestPathVisibleOnly, hiddenNodeIds } = get();
+    if (!shortestPathStartId || !shortestPathEndId) {
+      set({
+        shortestPaths: [],
+        currentPathIndex: 0,
+      });
+      const overlay = get().nodeOverlay;
+      if (overlay?.type === "shortest-path") {
+        set({ nodeOverlay: null });
+      }
+      return;
+    }
+
+    if (!graph.hasNode(shortestPathStartId) || !graph.hasNode(shortestPathEndId)) {
+      set({
+        shortestPaths: [],
+        currentPathIndex: 0,
+      });
+      const overlay = get().nodeOverlay;
+      if (overlay?.type === "shortest-path") {
+        set({ nodeOverlay: null });
+      }
+      return;
+    }
+
+    if (shortestPathStartId === shortestPathEndId) {
+      const paths = [[shortestPathStartId]];
+      set({
+        shortestPaths: paths,
+        currentPathIndex: 0,
+      });
+      get().setCurrentPathIndex(0);
+      return;
+    }
+
+    // BFS initialization
+    const distance: Record<string, number> = {};
+    const predecessors: Record<string, string[]> = {};
+    
+    const queue: string[] = [shortestPathStartId];
+    distance[shortestPathStartId] = 0;
+    predecessors[shortestPathStartId] = [];
+
+    let foundEnd = false;
+    let endDistance = Infinity;
+
+    while (queue.length > 0) {
+      const curr = queue.shift()!;
+      const currDist = distance[curr];
+
+      if (currDist >= endDistance) {
+        break;
+      }
+
+      const neighbors = graph.neighbors(curr);
+      for (const neighbor of neighbors) {
+        if (shortestPathVisibleOnly && hiddenNodeIds.has(neighbor)) {
+          continue;
+        }
+
+        const nextDist = currDist + 1;
+
+        if (distance[neighbor] === undefined) {
+          distance[neighbor] = nextDist;
+          predecessors[neighbor] = [curr];
+          queue.push(neighbor);
+          if (neighbor === shortestPathEndId) {
+            foundEnd = true;
+            endDistance = nextDist;
+          }
+        } else if (distance[neighbor] === nextDist) {
+          predecessors[neighbor].push(curr);
+        }
+      }
+    }
+
+    if (!foundEnd) {
+      set({
+        shortestPaths: [],
+        currentPathIndex: 0,
+      });
+      const overlay = get().nodeOverlay;
+      if (overlay?.type === "shortest-path") {
+        set({ nodeOverlay: null });
+      }
+      return;
+    }
+
+    // Backtrack paths
+    const paths: string[][] = [];
+    const buildPaths = (node: string, currentPath: string[]) => {
+      if (node === shortestPathStartId) {
+        paths.push([shortestPathStartId, ...currentPath]);
+        return;
+      }
+      const preds = predecessors[node] || [];
+      for (const pred of preds) {
+        buildPaths(pred, [node, ...currentPath]);
+      }
+    };
+    buildPaths(shortestPathEndId, []);
+
+    set({
+      shortestPaths: paths,
+      currentPathIndex: 0,
+    });
+
+    if (paths.length > 0) {
+      get().setCurrentPathIndex(0);
+    }
+  },
+
   clearGraph: () => {
     useUndoStore.getState().clear();
     set({
@@ -1687,6 +1892,11 @@ export const useGraphStore = create<GraphState>((set, get) => ({
       analysisResults: null,
       graphRecovery: { nonce: 0, reason: null },
       connectionDraft: { sourceId: null, targetId: null, dialogOpen: false },
+      shortestPathStartId: null,
+      shortestPathEndId: null,
+      shortestPaths: [],
+      currentPathIndex: 0,
+      shortestPathVisibleOnly: true,
     });
   },
 

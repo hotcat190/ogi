@@ -20,3 +20,7 @@ A mathematical score indicating the relative importance or influence of a node i
 
 ### Connected Component
 A maximal subgraph where any two entities are connected to each other by paths, representing isolated clusters of related intelligence.
+
+### Shortest Path
+The sequence of entities and edges of minimum length connecting two nodes in the graph, computed bidirectionally (undirected) to trace the closest relationship link between them.
+

@@ -29,6 +29,13 @@ OpenGraph Intel (OGI) is an open-source visual link analysis and OSINT framework
   - **Unified Reducers**: GraphCanvas serves as the single source of truth for `nodeReducer` and `edgeReducer` configurations, managing node size scaling, type-specific styling, community coloring, and connection visual cues dynamically.
   - **Window-bound Box Selection**: Captures modifier keys (`Shift`/`Ctrl`/`Meta`) on wrapper `onMouseDownCapture`. Registers mouse-move and mouse-up listeners directly on the `window` object to draw a dashed selection box and compute node selection in real-time, even across browser boundaries.
 - **Layout Presets**: Defined in `frontend/src/lib/graphLayouts.ts`. Includes Force-directed (ForceAtlas2), CoSE, circular, spiral, concentric, components, Sugiyama, and grid layouts.
+- **Shortest Path Integration**:
+  - Computed entirely on the client-side (frontend) using an undirected Breadth-First Search (BFS) on the in-memory `graphology` instance.
+  - Highlights path nodes and edges using `nodeReducer` and `edgeReducer` via a custom overlay (`nodeOverlay` of type `shortest-path`).
+  - Colors the start node gold (#eab308) and the end node green (#22c55e), colors path edges bright blue (#3b82f6) and scales up thickness. Fades non-path nodes/edges (opacity `0.1` or hides entirely) to preserve overall graph context.
+  - Supports a visible-only filter toggle (defaults to true). If disabled, traverses the full graph and temporarily reveals hidden/filtered nodes/edges on the path.
+  - Supports multiple minimal hop shortest paths with a pager control ("Path 1 of N") to cycle through and highlight them individually.
+  - Integrates manual searchable autocomplete inputs (Start/End) in the bottom Analysis tab, direct canvas click/selection updates, and right-click context menu options.
 - **Performance & Execution**:
   - ForceAtlas2 layouts are executed synchronously on the main thread: `forceAtlas2.assign(graph, { ... })`. For large graphs, this blocks the user interface.
   - Kamada-Kawai layout scales poorly ($O(N^2)$ to $O(N^3)$) and automatically falls back to ForceAtlas2 if node count exceeds 140.

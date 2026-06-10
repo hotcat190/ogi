@@ -457,7 +457,8 @@ export function GraphCanvas() {
     const renderer = sigmaRef.current;
 
     renderer.setSetting("nodeReducer", (node, data) => {
-      if (hiddenNodeIds.has(node)) {
+      const isPathNode = nodeOverlay?.type === "shortest-path" && nodeOverlay.pathNodeIds.has(node);
+      if (hiddenNodeIds.has(node) && !isPathNode) {
         return { ...data, hidden: true, label: "" };
       }
 
@@ -516,6 +517,34 @@ export function GraphCanvas() {
         if (nodeOverlay.type === "analysis-communities") {
           return { ...data, color: nodeOverlay.colors[node] ?? data.color };
         }
+        if (nodeOverlay.type === "shortest-path") {
+          const { pathNodeIds, startNodeId, endNodeId } = nodeOverlay;
+          if (node === startNodeId || node === endNodeId) {
+            const isStart = node === startNodeId;
+            return {
+              ...data,
+              color: isStart ? "#eab308" : "#22c55e",
+              size: (data.size ?? 8) + 5,
+              zIndex: 3,
+              highlighted: true,
+              highlightedLabelColor: "#ffffff",
+              highlightedLabelBackground: isStart ? "#854d0e" : "#166534",
+            };
+          }
+          if (pathNodeIds.has(node)) {
+            return {
+              ...data,
+              size: (data.size ?? 8) + 3,
+              zIndex: 2,
+              highlighted: true,
+            };
+          }
+          return {
+            ...data,
+            color: `${data.color}22`,
+            label: "",
+          };
+        }
       }
 
       // 2. Selection highlight
@@ -545,6 +574,19 @@ export function GraphCanvas() {
     renderer.setSetting("edgeReducer", (edge, data) => {
       const src = graph.source(edge);
       const tgt = graph.target(edge);
+
+      if (nodeOverlay?.type === "shortest-path") {
+        if (nodeOverlay.pathEdgeIds.has(edge)) {
+          return {
+            ...data,
+            color: "#3b82f6",
+            size: Math.max((data.size ?? 2) * 2.5, 5),
+            zIndex: 3,
+          };
+        }
+        return { ...data, hidden: true };
+      }
+
       if (
         hiddenEdgeIds.has(edge) ||
         hiddenNodeIds.has(src) ||
