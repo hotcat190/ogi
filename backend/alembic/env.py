@@ -85,14 +85,17 @@ async def run_async_migrations() -> None:
 
     """
     import uuid
-    connectable = create_async_engine(
-        db_url,
-        poolclass=pool.NullPool,
-        connect_args={
+    connect_args = {}
+    if not settings.use_sqlite:
+        connect_args = {
             "prepared_statement_name_func": lambda: f"__asyncpg_{uuid.uuid4()}__",
             "prepared_statement_cache_size": 0,
             "statement_cache_size": 0
         }
+    connectable = create_async_engine(
+        db_url,
+        poolclass=pool.NullPool,
+        connect_args=connect_args
     )
 
     async with connectable.connect() as connection:

@@ -106,6 +106,23 @@ A **Transform** is a plugin or built-in script that accepts an input entity and 
   - Forwards all transform events verbatim to connected WebSocket clients for that project.
 - **Frontend Hook (`useTransformWebSocket`)**:
   - Merges new entities/edges received on `job_completed` events directly into the Sigma.js/Graphology canvas.
+### 6. AI Investigator Benchmarking & Evaluation Framework
+
+- **Module Location**: `backend/evaluate/` - a dedicated evaluation framework.
+- **Implemented Components**:
+  - `models.py`: Defines `EvalTask` and `EvalResult` schemas for benchmarking jobs.
+  - `dataset.py`: Parses STIX 2.1 JSON bundles, extracts domain objects and indicator patterns using regular expressions (mapping patterns such as `[ipv4-addr:value = '...']` to OGI types like `IPAddress` or `Domain`), and seeds them directly into OGI's database project.
+  - `judge.py`: Implements LLM-as-a-Judge semantic grading of summaries using the Gemini API.
+  - `runner.py`: Orchestrates task execution in Static Mode. Overrides the `run_transform` tool call with `mock_run_transform_static` to dynamically resolve relationships from the seeded DB rather than making external network requests. Automatically handles key-absent environments by falling back to a `ScriptedLLMProvider`.
+  - `cli.py`: A command-line interface implemented with Typer (similar to `ogi dev`) that seeds any STIX 2.1 JSON dataset directly into SQLite or a Docker-based Postgres database. Can be run directly inside the running Docker backend container to seed PostgreSQL: `docker exec ogi-backend-1 python -m evaluate.cli seed -d evaluate/datasets/apt1.json -p APT1-Docker`.
+- **Data Execution Modes**:
+  - **Static Mode (Phase 1)**: Populates the OGI database with the dataset's entities and edges beforehand, evaluating the agent's capacity to query and synthesize static graph states.
+  - **Active Traversal Mode (Phase 2)**: Intercepts `run_transform` calls with a mock transform registry that queries the dataset's hidden graph representation dynamically, testing active planning and exploration.
+- **Metrics & Hybrid Grading**:
+  - **Accuracy**: Measured by programmatic exact matching of target entities in the output plus semantic evaluation via an LLM-as-a-Judge. Calculates Precision, Recall, and F1 based on target entities visited or mentioned in the final summary.
+  - **Efficiency**: Tracks total steps, prompt/completion tokens, and duration.
+  - **Path Traversal Quality**: F1/precision/recall of node visits.
+- **Target LLM**: Evaluates investigator performance on Gemini Flash.
 
 ---
 
@@ -113,3 +130,4 @@ A **Transform** is a plugin or built-in script that accepts an input entity and 
 - **Package Managers**: `uv` for backend, `pnpm` for frontend.
 - **CLI Wrapper**: Entrypoint `ogi` implemented with Typer in `backend/ogi/cli/main.py`.
 - **Tests**: Pytest for backend, Vitest/ESLint for frontend.
+
